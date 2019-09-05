@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -17,13 +18,17 @@ var client = http.Client{
 }
 
 // Download an image from a url and save to fd
-func downloadImageToFile(imageUrl string, localFile *os.File) error {
+func downloadToFile(url string, localFile *os.File) error {
 	// Ref: https://golangcode.com/download-a-file-from-a-url/
-	resp, err := client.Get(imageUrl)
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return errors.New(fmt.Sprintf("Url invalid (statusCode %v", resp.StatusCode))
+	}
 
 	_, err = io.Copy(localFile, resp.Body)
 	if err != nil {

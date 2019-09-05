@@ -12,8 +12,8 @@ import (
 	"strings"
 )
 
-const USAGE = `Usage: rquent <image_file> <csv_out>\n
-	image_file = file that contains batch of images\n
+const USAGE = `Usage: ./rquent <image_file> <csv_out>\n
+  image_file = file that contains batch of images\n
   csv_out = file to write results to`
 
 func processLine(imageUrl string) ([3]color.NRGBA, error) {
@@ -24,7 +24,7 @@ func processLine(imageUrl string) ([3]color.NRGBA, error) {
 	}
 	defer tmpImg.Close()
 	defer os.Remove(tmpImg.Name())
-	if err := downloadImageToFile(imageUrl, tmpImg); err != nil {
+	if err := downloadToFile(imageUrl, tmpImg); err != nil {
 		return [3]color.NRGBA{}, err
 	}
 
