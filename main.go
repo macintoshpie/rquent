@@ -8,6 +8,7 @@ import (
 	"image/color"
 	_ "image/jpeg"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -16,7 +17,7 @@ const USAGE = `Usage: ./rquent <image_file> <csv_out>\n
   image_file = file that contains batch of images\n
   csv_out = file to write results to`
 
-func processLine(imageUrl string) ([3]color.NRGBA, error) {
+func processLine(imageUrl string, httpClient http.Client) ([3]color.NRGBA, error) {
 	// download the image
 	tmpImg, err := ioutil.TempFile("", "*.jpeg")
 	if err != nil {
@@ -24,7 +25,7 @@ func processLine(imageUrl string) ([3]color.NRGBA, error) {
 	}
 	defer tmpImg.Close()
 	defer os.Remove(tmpImg.Name())
-	if err := downloadToFile(imageUrl, tmpImg); err != nil {
+	if err := downloadToFile(imageUrl, tmpImg, &httpClient); err != nil {
 		return [3]color.NRGBA{}, err
 	}
 
@@ -65,10 +66,12 @@ func main() {
 	defer imagesFile.Close()
 	scanner := bufio.NewScanner(imagesFile)
 
+	httpClient := newClient(defaultTimeout)
+
 	// process each line
 	for scanner.Scan() {
 		imgUrl := scanner.Text()
-		res, err := processLine(imgUrl)
+		res, err := processLine(imgUrl, *httpClient)
 		if err != nil {
 			fmt.Println(err)
 			return

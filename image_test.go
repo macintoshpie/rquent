@@ -1,14 +1,66 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"io/ioutil"
 	"math"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 )
+
+// create a client for mocking requests
+func mockHTTPClient(client http.Client, handler http.Handler) (*http.Client, func()) {
+	s := httptest.NewServer(handler)
+
+	cli := client
+
+	cli.Transport = &http.Transport{
+		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+			return net.Dial(network, s.Listener.Addr().String())
+		},
+	}
+
+	return &cli, s.Close
+}
+
+// create the handler for mock requests
+func mockHandlerFunc() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println(r.URL.Path)
+		switch r.URL.Path {
+		case "/valid.jpg":
+			http.ServeFile(w, r, "./testing/valid.jpg")
+		case "/slow":
+			time.Sleep(10 * time.Second)
+			http.ServeFile(w, r, "./testing/valid.jpg")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+}
+
+var testClient *http.Client
+
+func TestMain(m *testing.M) {
+	// setup
+	var sClose func()
+	testClient, sClose = mockHTTPClient(*newClient(defaultTimeout), mockHandlerFunc())
+
+	// run tests
+	res := m.Run()
+
+	// cleanup and exit
+	sClose()
+	os.Exit(res)
+}
 
 func TestDownloadToFileSuccess(t *testing.T) {
 	// setup
@@ -20,8 +72,8 @@ func TestDownloadToFileSuccess(t *testing.T) {
 	defer os.Remove(localFile.Name())
 
 	// download the image
-	imgUrl := "http://i.imgur.com/FApqk3D.jpg"
-	err = downloadToFile(imgUrl, localFile)
+	imgUrl := "http://mock.com/valid.jpg"
+	err = downloadToFile(imgUrl, localFile, testClient)
 	if err != nil {
 		t.Errorf("Expected (nil) Got (%v)", err)
 	}
@@ -42,8 +94,8 @@ func TestDownloadToFile404Image(t *testing.T) {
 	defer os.Remove(localFile.Name())
 
 	// download the image
-	imgUrl := "http://i.imgur.com/BOGUS_IMAGE.jpg"
-	err = downloadToFile(imgUrl, localFile)
+	imgUrl := "http://mock.com/bogusimage.jpg"
+	err = downloadToFile(imgUrl, localFile, testClient)
 	if err == nil {
 		t.Errorf("Expected (error) Got (%v)", err)
 	}
@@ -59,8 +111,8 @@ func TestDownloadImageToFileTimeout(t *testing.T) {
 	defer os.Remove(localFile.Name())
 
 	// visit url that waits longer than our client's timeout
-	imgUrl := "https://httpstat.us/200?sleep=10000"
-	err = downloadToFile(imgUrl, localFile)
+	imgUrl := "http://mock.com/slow"
+	err = downloadToFile(imgUrl, localFile, testClient)
 	if err == nil {
 		t.Errorf("Expected (client timeout error) Got (%v)", err)
 	}
