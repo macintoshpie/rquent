@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestDownloadImageToFile(t *testing.T) {
+func TestDownloadImageToFileSuccess(t *testing.T) {
 	// setup
 	localFile, err := ioutil.TempFile("", "*.jpg")
 	if err != nil {
@@ -29,6 +29,23 @@ func TestDownloadImageToFile(t *testing.T) {
 	// check the file exists
 	if _, err := os.Stat(localFile.Name()); err != nil {
 		t.Errorf("Expected (image file to exist) Got (not exists)")
+	}
+}
+
+func TestDownloadImageToFileTimeout(t *testing.T) {
+	// setup
+	localFile, err := ioutil.TempFile("", "*.jpg")
+	if err != nil {
+		t.Errorf("Failed to create tmp image")
+	}
+	defer localFile.Close()
+	defer os.Remove(localFile.Name())
+
+	// visit url that waits longer than our client's timeout
+	imgUrl := "https://httpstat.us/200?sleep=10000"
+	err = downloadImageToFile(imgUrl, localFile)
+	if err == nil {
+		t.Errorf("Expected (client timeout error) Got (%v)", err)
 	}
 }
 

@@ -7,12 +7,19 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
+
+const defaultTimeout = time.Duration(5 * time.Second)
+
+var client = http.Client{
+	Timeout: defaultTimeout,
+}
 
 // Download an image from a url and save to fd
 func downloadImageToFile(imageUrl string, localFile *os.File) error {
 	// Ref: https://golangcode.com/download-a-file-from-a-url/
-	resp, err := http.Get(imageUrl)
+	resp, err := client.Get(imageUrl)
 	if err != nil {
 		return err
 	}
