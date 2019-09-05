@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"io"
 	"net/http"
 	"os"
@@ -56,12 +57,18 @@ func getPrevalentColors(img image.Image) ([3]color.NRGBA, error) {
 	counts[PlaceholderColor] = 0
 	mostColors := [3]color.NRGBA{PlaceholderColor, PlaceholderColor, PlaceholderColor}
 
-	bounds := img.Bounds()
-	for x := bounds.Min.X; x < bounds.Max.X; x++ {
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+	// convert image to NRGBA pixels
+	rect := img.Bounds()
+	imgNRGBA := image.NewNRGBA(rect)
+	draw.Draw(imgNRGBA, rect, img, rect.Min, draw.Src)
+	imgPix := imgNRGBA.Pix
+	imgStride := imgNRGBA.Stride
+
+	for x := rect.Min.X; x < rect.Max.X; x++ {
+		for y := rect.Min.Y; y < rect.Max.Y; y++ {
 			// convert color at x, y to NRGBA
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			c.A = 255
+			pixel := (y-rect.Min.Y)*imgStride + (x-rect.Min.X)*4
+			c := color.NRGBA{imgPix[pixel], imgPix[pixel+1], imgPix[pixel+2], 255}
 			counts[c] += 1
 
 			// TODO: consider factoring out into function
