@@ -1,0 +1,80 @@
+package main
+
+import (
+	"fmt"
+	"image"
+	"image/color"
+	"io"
+	"net/http"
+	"os"
+)
+
+// Download an image from a url and save to fd
+func downloadImageToFile(imageUrl string, localFile *os.File) error {
+	// Ref: https://golangcode.com/download-a-file-from-a-url/
+	resp, err := http.Get(imageUrl)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(localFile, resp.Body)
+	if err != nil {
+		return err
+	}
+
+	_, err = localFile.Seek(0, 0)
+	return err
+}
+
+// Get NRGBA color as hex string
+func hexify(c color.NRGBA) string {
+	return fmt.Sprintf("#%.2x%.2x%.2x", c.R, c.G, c.B)
+}
+
+// Used to indicate a color that's not from the source image
+var PlaceholderColor = color.NRGBA{}
+
+// Return slice of colors in sorted order of prevalence
+func getPrevalentColors(img image.Image) ([3]color.NRGBA, error) {
+	// NOTE: to generalize to k most prevalent, use a min-heap
+	counts := make(map[color.NRGBA]uint64)
+	counts[PlaceholderColor] = 0
+	mostColors := [3]color.NRGBA{PlaceholderColor, PlaceholderColor, PlaceholderColor}
+
+	bounds := img.Bounds()
+	for x := bounds.Min.X; x < bounds.Max.X; x++ {
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			// convert color at x, y to NRGBA
+			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			c.A = 255
+			counts[c] += 1
+
+			// TODO: consider factoring out into function
+			// update most frequent colors as needed
+			if c == mostColors[0] || c == mostColors[1] || c == mostColors[2] {
+				// case 1: color is already one of the most frequent - check if it needs to be swapped
+				for j := 1; j < 3; j += 1 {
+					if c == mostColors[j] && counts[c] > counts[mostColors[j-1]] {
+						mostColors[j-1], mostColors[j] = mostColors[j], mostColors[j-1]
+						break
+					}
+				}
+			} else {
+				// case 2: color is not one of the most frequent - insert at first empty slot or the end
+				if counts[c] > counts[mostColors[2]] {
+					for i := 0; i < 3; i += 1 {
+						if mostColors[i] == PlaceholderColor {
+							mostColors[i] = c
+							break
+						} else if i == 2 {
+							mostColors[2] = c
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return mostColors, nil
+}
