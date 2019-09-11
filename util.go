@@ -7,11 +7,20 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 // Get NRGBA color as hex string
 func hexify(c color.NRGBA) string {
 	return fmt.Sprintf("#%.2x%.2x%.2x", c.R, c.G, c.B)
+}
+
+const defaultTimeout = time.Duration(5 * time.Second)
+
+func newClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+	}
 }
 
 // Download an file from a url and save to fd

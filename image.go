@@ -3,8 +3,6 @@ package main
 import (
 	"image"
 	"image/color"
-	"net/http"
-	"time"
 )
 
 type RqImage struct {
@@ -34,14 +32,6 @@ func (img *RqImage) GetHexSummary() []string {
 		hexes[i] = hexify(c)
 	}
 	return hexes
-}
-
-const defaultTimeout = time.Duration(5 * time.Second)
-
-func newClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout: timeout,
-	}
 }
 
 // Used to indicate a color that's not from the source image; should not be modified
