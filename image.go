@@ -1,13 +1,9 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"image"
 	"image/color"
-	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -19,9 +15,8 @@ type RqImage struct {
 	nFails   int
 }
 
-// most prevalent colors in sorted order (most prevalent first)
 type colorSummary struct {
-	colors []color.NRGBA
+	colors []color.NRGBA // most prevalent colors in sorted order (most prevalent first)
 }
 
 func NewRqImage(url string) RqImage {
@@ -49,34 +44,7 @@ func newClient(timeout time.Duration) *http.Client {
 	}
 }
 
-// Download an image from a url and save to fd
-func downloadToFile(url string, localFile *os.File, client *http.Client) error {
-	// Ref: https://golangcode.com/download-a-file-from-a-url/
-	resp, err := client.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return errors.New(fmt.Sprintf("Url invalid (statusCode %v", resp.StatusCode))
-	}
-
-	_, err = io.Copy(localFile, resp.Body)
-	if err != nil {
-		return err
-	}
-
-	_, err = localFile.Seek(0, 0)
-	return err
-}
-
-// Get NRGBA color as hex string
-func hexify(c color.NRGBA) string {
-	return fmt.Sprintf("#%.2x%.2x%.2x", c.R, c.G, c.B)
-}
-
-// Used to indicate a color that's not from the source image
+// Used to indicate a color that's not from the source image; should not be modified
 var PlaceholderColor = color.NRGBA{}
 
 // Return slice of colors in sorted order of prevalence
