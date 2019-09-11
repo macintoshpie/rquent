@@ -35,7 +35,7 @@ func main() {
 	// Setup input and output files
 	csvoutFile, err := os.Create(*csvoutPath)
 	if err != nil {
-		log.Printf("Failed to open output file (%v): %v", csvoutPath, err)
+		log.Printf("Failed to open output file (%v): %v", *csvoutPath, err)
 		flag.Usage()
 		return
 	}
@@ -43,7 +43,7 @@ func main() {
 
 	imagesFile, err := os.Open(*imagesPath)
 	if err != nil {
-		log.Printf("Failed to open source file (%v): %v", imagesPath, err)
+		log.Printf("Failed to open source file (%v): %v", *imagesPath, err)
 		flag.Usage()
 		return
 	}
