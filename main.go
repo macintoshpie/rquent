@@ -3,15 +3,16 @@ package main
 import (
 	"bufio"
 	"errors"
-	"fmt"
+	"flag"
 	"image"
 	_ "image/jpeg"
 	"io"
 	"io/ioutil"
 	"log"
-	"math"
 	"net/http"
 	"os"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,7 +32,9 @@ type RqPipeline struct {
 }
 
 type RqPool struct {
-	nWorkers     int
+	nDownload    int
+	nSummarize   int
+	nCleanup     int
 	wg           sync.WaitGroup
 	downloadChn  chan RqJob
 	summarizeChn chan RqJob
@@ -74,11 +77,6 @@ const (
 
 const RqJobMaxFails = 3
 
-func (q *RqQueue) enqueue(job RqJob) {
-	atomic.AddUint32(&q.cnt, 1)
-	q.chn <- job
-}
-
 func NewRqError(job RqJob, errorType RqErrorType, message string) RqError {
 	job.nFails += 1
 	return RqError{
@@ -88,11 +86,12 @@ func NewRqError(job RqJob, errorType RqErrorType, message string) RqError {
 	}
 }
 
-// Create a new pipeline; if nWorkers <= 0, run download and process sync
-func NewPipeline(nWorkers int) *RqPipeline {
-	nWorkers = int(math.Max(1, float64(nWorkers)))
+// Create a new pipeline
+func NewPipeline(cfg PipeConfig) *RqPipeline {
 	pool := RqPool{
-		nWorkers:     nWorkers,
+		nDownload:    cfg.Download,
+		nSummarize:   cfg.Summarize,
+		nCleanup:     cfg.Cleanup,
 		wg:           sync.WaitGroup{},
 		downloadChn:  make(chan RqJob),
 		summarizeChn: make(chan RqJob),
@@ -128,6 +127,10 @@ func (pipe *RqPipeline) WithOutput(out io.Writer) *RqPipeline {
 }
 
 func (pipe *RqPipeline) Init() (*RqPipeline, error) {
+	pool := pipe.pool
+	if pool.nDownload <= 0 || pool.nSummarize <= 0 || pool.nCleanup <= 0 {
+		return pipe, errors.New("Pipeline config values for workers must be greater than 0")
+	}
 	if pipe.sourceURLs == nil {
 		return pipe, errors.New("Pipeline has no source set. Use method WithSource to set it.")
 	}
@@ -161,7 +164,7 @@ func (pipe *RqPipeline) writeResults() {
 	for job := range pipe.pool.saveChn {
 		line := []string{job.image.URL}
 		line = append(line, job.image.GetHexSummary()...)
-		_, err := pipe.outFile.Write([]byte(strings.Join(line, ",")))
+		_, err := pipe.outFile.Write([]byte(strings.Join(line, ",") + "\n"))
 		if err != nil {
 			pipe.pool.errorChn <- NewRqError(job, RqErrorNoRetry, err.Error())
 			continue
@@ -171,6 +174,7 @@ func (pipe *RqPipeline) writeResults() {
 		log.Printf("Finished %v", job.image.URL)
 
 		if pipe.isDone() {
+			log.Println("PIPELINE COMPLETE!")
 			pipe.pool.stopWorkers()
 			return
 		}
@@ -201,11 +205,58 @@ func (pipe *RqPipeline) isDone() bool {
 }
 
 func (pool *RqPool) stopWorkers() {
+	nWorkers := pool.nDownload + pool.nSummarize + pool.nCleanup
 	pool.stopOnce.Do(func() {
-		for i := 0; i < pool.nWorkers; i += 1 {
+		for i := 0; i < nWorkers; i += 1 {
 			pool.doneChn <- 1
 		}
 	})
+}
+
+func (pipe *RqPipeline) workDownload() {
+	defer pipe.pool.wg.Done()
+	pool := pipe.pool
+	for {
+		select {
+		case job := <-pool.downloadChn:
+			job.retryChn = pool.downloadChn
+			job.nextChn = pool.summarizeChn
+			downloadImage(job, pool.client, pool.errorChn)
+		case <-pool.doneChn:
+			// log.Println("workDownload exiting")
+			return
+		}
+	}
+}
+
+func (pipe *RqPipeline) workSummarize() {
+	defer pipe.pool.wg.Done()
+	pool := pipe.pool
+	for {
+		select {
+		case job := <-pool.summarizeChn:
+			job.retryChn = pool.summarizeChn
+			job.nextChn = pool.cleanupChn
+			summarizeImage(job, pool.errorChn)
+		case <-pool.doneChn:
+			return
+		}
+	}
+}
+
+func (pipe *RqPipeline) workCleanup() {
+	defer pipe.pool.wg.Done()
+	pool := pipe.pool
+	for {
+		select {
+		case job := <-pool.cleanupChn:
+			job.retryChn = pool.cleanupChn
+			job.nextChn = pool.saveChn
+			cleanupImage(job, pool.errorChn)
+		case <-pool.doneChn:
+			return
+		}
+	}
 }
 
 // close all channels used by the pool
@@ -225,52 +276,26 @@ func (pipe *RqPipeline) Run() {
 	// goroutine to write results
 	go pipe.writeResults()
 
-	// kickoff workers
-	for i := 0; i < pipe.pool.nWorkers-1; i += 1 {
+	// kickoff core pipeline workers
+	for i := 0; i < pipe.pool.nDownload; i += 1 {
 		pipe.pool.wg.Add(1)
-		go pipe.work()
+		go pipe.workDownload()
+	}
+	for i := 0; i < pipe.pool.nSummarize; i += 1 {
+		pipe.pool.wg.Add(1)
+		go pipe.workSummarize()
+	}
+	for i := 0; i < pipe.pool.nCleanup-1; i += 1 {
+		pipe.pool.wg.Add(1)
+		go pipe.workCleanup()
 	}
 
-	// send main goroutine to do work
+	// send main goroutine to do work (cleanup)
 	pipe.pool.wg.Add(1)
-	pipe.work()
+	pipe.workCleanup()
 
 	pipe.pool.wg.Wait()
 	pipe.pool.closeChns()
-}
-
-// worker function
-func (pipe *RqPipeline) work() {
-	defer pipe.pool.wg.Done()
-	pool := pipe.pool
-
-	for {
-		select {
-		case job := <-pool.downloadChn:
-			job.retryChn = pool.downloadChn
-			job.nextChn = pool.summarizeChn
-			downloadImage(job, pool.client, pool.errorChn)
-
-		case job := <-pool.summarizeChn:
-			job.retryChn = pool.summarizeChn
-			job.nextChn = pool.cleanupChn
-			summarizeImage(job, pool.errorChn)
-
-		case job := <-pool.cleanupChn:
-			job.retryChn = pool.cleanupChn
-			job.nextChn = pool.saveChn
-			cleanupImage(job, pool.errorChn)
-
-		case jobError := <-pool.errorChn:
-			pipe.handleError(jobError)
-
-		case <-pool.doneChn:
-			return
-
-		default:
-			// log.Println("whoops")
-		}
-	}
 }
 
 // Download an image from its url
@@ -340,32 +365,53 @@ func cleanupImage(job RqJob, errorChn chan<- RqError) {
 	job.nextChn <- job
 }
 
+type PipeConfig struct {
+	Download  int
+	Summarize int
+	Cleanup   int
+}
+
 func main() {
-	// TODO: use flags package for args
-	if len(os.Args) < 3 {
-		fmt.Println(USAGE)
-		os.Exit(1)
+	var imagesPath *string = flag.String("urls", "", "source file for images (required)")
+	var csvoutPath *string = flag.String("out", "results.csv", "destination for results")
+	var nDownload *int = flag.Int("download", 10, "number of workers downloading images")
+	var nSummarize *int = flag.Int("summarize", 2, "number of workers summarizing images")
+	var nCleanup *int = flag.Int("cleanup", 2, "number of workers cleaning up images")
+	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+	var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+
+	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
 	}
 
-	// open the file with image URLs and setup the CSV output file
-	imagesPath := strings.TrimSpace(os.Args[1])
-	csvoutPath := strings.TrimSpace(os.Args[2])
-
-	csvoutFile, err := os.Create(csvoutPath)
+	csvoutFile, err := os.Create(*csvoutPath)
 	if err != nil {
-		fmt.Println(err)
+		log.Printf("Failed to open output file (%v): %v", csvoutPath, err)
+		flag.Usage()
 		return
 	}
 	defer csvoutFile.Close()
 
-	imagesFile, err := os.Open(imagesPath)
+	imagesFile, err := os.Open(*imagesPath)
 	if err != nil {
-		fmt.Println(err)
+		log.Printf("Failed to open source file (%v): %v", imagesPath, err)
+		flag.Usage()
 		return
 	}
 	defer imagesFile.Close()
 
-	pipeline, err := NewPipeline(20).
+	pipeCfg := PipeConfig{*nDownload, *nSummarize, *nCleanup}
+	pipeline, err := NewPipeline(pipeCfg).
 		WithSource(imagesFile).
 		WithOutput(csvoutFile).
 		Init()
@@ -373,4 +419,16 @@ func main() {
 		log.Fatalln(err)
 	}
 	pipeline.Run()
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close()
+		runtime.GC() // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
 }

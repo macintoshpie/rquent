@@ -42,12 +42,14 @@ func getErrorChn(errorChn <-chan RqError) (RqError, error) {
 	}
 }
 
+var testPipeConfig = PipeConfig{1, 1, 1}
+
 func TestMakePipeline(t *testing.T) {
 	s := `test.com/valid`
 	imageURLs := strings.NewReader(s)
 	var b bytes.Buffer
 	output := bufio.NewWriter(&b)
-	_, err := NewPipeline(0).
+	_, err := NewPipeline(testPipeConfig).
 		WithClient(testClient).
 		WithSource(imageURLs).
 		WithOutput(output).
@@ -305,7 +307,7 @@ func TestPipelineRunSimpleOK(t *testing.T) {
 	imageURLs := strings.NewReader(s)
 	b := new(bytes.Buffer)
 	// csvOut := bufio.NewWriter(b)
-	pipeline, err := NewPipeline(2).
+	pipeline, err := NewPipeline(testPipeConfig).
 		WithClient(testClient).
 		WithSource(imageURLs).
 		WithOutput(b).
@@ -323,11 +325,12 @@ func TestPipelineRunSimpleOK(t *testing.T) {
 }
 
 func benchmarkPipeline(nWorkers, nImages int, b *testing.B) {
+	// TODO: refactor - nWorkers is not being used
 	s := strings.Repeat(testImageURL200+"\n", nImages)
 	for n := 0; n < b.N; n++ {
 		buff := new(bytes.Buffer)
 		imageURLs := strings.NewReader(s)
-		pipeline, err := NewPipeline(nWorkers).
+		pipeline, err := NewPipeline(testPipeConfig).
 			WithClient(testClient).
 			WithSource(imageURLs).
 			WithOutput(buff).
