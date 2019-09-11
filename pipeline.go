@@ -95,7 +95,7 @@ func NewPipeline(cfg PipeConfig) *RqPipeline {
 		summarizeChn: make(chan RqJob),
 		cleanupChn:   make(chan RqJob),
 		saveChn:      make(chan RqJob),
-		errorChn:     make(chan RqError),
+		errorChn:     make(chan RqError, 1000),
 		doneChn:      make(chan int),
 		client:       newClient(defaultTimeout),
 		stopOnce:     sync.Once{},
@@ -179,12 +179,27 @@ func (pipe *RqPipeline) writeResults() {
 	}
 }
 
+func (pipe *RqPipeline) handleErrors() {
+	defer pipe.pool.wg.Done()
+	for {
+		select {
+		case jobError := <-pipe.pool.errorChn:
+			pipe.handleError(jobError)
+		case <-pipe.pool.doneChn:
+			log.Println("handleErrors exiting")
+			return
+		}
+	}
+}
+
 // Handles job errors by requeuing them or removing them from the pipeline
 func (pipe *RqPipeline) handleError(jobError RqError) {
-	if jobError.errorType == RqErrorNoRetry || jobError.job.nFails >= RqJobMaxFails {
+	if jobError.errorType == RqErrorNoRetry ||
+		jobError.job.nFails >= RqJobMaxFails ||
+		jobError.job.retryChn == nil {
 		log.Printf("Job Failed: %v\n", jobError.errorMsg)
-		// cleanup image - ignore failures to prevent infinite loop
-		cleanupImage(jobError.job, nil)
+		// delete possible remaining image
+		os.Remove(jobError.job.image.filePath)
 		atomic.AddUint64(&pipe.imageCount, ^uint64(0))
 		if pipe.isDone() {
 			pipe.pool.stopWorkers()
@@ -205,7 +220,8 @@ func (pipe *RqPipeline) isDone() bool {
 
 // stop all workers
 func (pool *RqPool) stopWorkers() {
-	nWorkers := pool.nDownload + pool.nSummarize + pool.nCleanup
+	nWorkers := pool.nDownload + pool.nSummarize + pool.nCleanup + 1 // +1 for Error handler
+
 	pool.stopOnce.Do(func() {
 		for i := 0; i < nWorkers; i += 1 {
 			pool.doneChn <- 1
@@ -224,7 +240,7 @@ func (pipe *RqPipeline) workDownload() {
 			job.nextChn = pool.summarizeChn
 			downloadImage(job, pool.client, pool.errorChn)
 		case <-pool.doneChn:
-			// log.Println("workDownload exiting")
+			log.Println("workDownload exiting")
 			return
 		}
 	}
@@ -241,6 +257,7 @@ func (pipe *RqPipeline) workSummarize() {
 			job.nextChn = pool.cleanupChn
 			summarizeImage(job, pool.errorChn)
 		case <-pool.doneChn:
+			log.Println("workSummarize exiting")
 			return
 		}
 	}
@@ -257,6 +274,7 @@ func (pipe *RqPipeline) workCleanup() {
 			job.nextChn = pool.saveChn
 			cleanupImage(job, pool.errorChn)
 		case <-pool.doneChn:
+			log.Println("workCleanup exiting")
 			return
 		}
 	}
@@ -277,6 +295,10 @@ func (pipe *RqPipeline) Run() {
 	// goroutines for the beginning and end of pipeline
 	go pipe.readURLs()
 	go pipe.writeResults()
+
+	// start error handling
+	pipe.pool.wg.Add(1)
+	go pipe.handleErrors()
 
 	// kickoff core pipeline workers
 	for i := 0; i < pipe.pool.nDownload; i += 1 {
