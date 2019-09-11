@@ -1,66 +1,14 @@
 package main
 
 import (
-	"context"
-	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"io/ioutil"
 	"math"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
-	"time"
 )
-
-// create a client for mocking requests
-func mockHTTPClient(client http.Client, handler http.Handler) (*http.Client, func()) {
-	s := httptest.NewServer(handler)
-
-	cli := client
-
-	cli.Transport = &http.Transport{
-		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
-			return net.Dial(network, s.Listener.Addr().String())
-		},
-	}
-
-	return &cli, s.Close
-}
-
-// create the handler for mock requests
-func mockHandlerFunc() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println(r.URL.Path)
-		switch r.URL.Path {
-		case "/valid.jpg":
-			http.ServeFile(w, r, "./testing/valid.jpg")
-		case "/slow":
-			time.Sleep(10 * time.Second)
-			http.ServeFile(w, r, "./testing/valid.jpg")
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	})
-}
-
-var testClient *http.Client
-
-func TestMain(m *testing.M) {
-	// setup
-	var sClose func()
-	testClient, sClose = mockHTTPClient(*newClient(defaultTimeout), mockHandlerFunc())
-
-	// run tests
-	res := m.Run()
-
-	// cleanup and exit
-	sClose()
-	os.Exit(res)
-}
 
 func TestDownloadToFileSuccess(t *testing.T) {
 	// setup
@@ -172,14 +120,14 @@ func TestGetPrevalentColorsSingleColor(t *testing.T) {
 	for _, tt := range rgbSingleColorTests {
 		t.Run(tt.name, func(t *testing.T) {
 			colorImg := newColorsImage(width, height, tt.colors, false)
-			colors, err := getPrevalentColors(colorImg)
+			summary, err := getPrevalentColors(&colorImg)
 
 			if err != nil {
 				t.Errorf("Expected (nil) Got (%v)", err)
 			}
 
-			if colors[0] != tt.colors[0].color {
-				t.Errorf("Expected (colors[0] == %v) Got (%v)", tt.colors[0].color, colors)
+			if summary.colors[0] != tt.colors[0].color {
+				t.Errorf("Expected (colors[0] == %v) Got (%v)", tt.colors[0].color, summary.colors)
 			}
 		})
 	}
@@ -199,7 +147,7 @@ func TestGetPrevalentColorsManyColors(t *testing.T) {
 	for _, tt := range rgbManyColorTests {
 		t.Run(tt.name, func(t *testing.T) {
 			colorImg := newColorsImage(width, height, tt.colorsSorted, false)
-			colors, err := getPrevalentColors(colorImg)
+			summary, err := getPrevalentColors(&colorImg)
 
 			if err != nil {
 				t.Errorf("Expected (nil) Got (%v)", err)
@@ -209,16 +157,16 @@ func TestGetPrevalentColorsManyColors(t *testing.T) {
 			nExpected := int(math.Min(float64(len(tt.colorsSorted)), 3))
 			for i := 0; i < nExpected; i++ {
 				expected := tt.colorsSorted[i].color
-				if colors[i] != expected {
-					t.Errorf("Expected (colors[%v] == %v) Got (%v)", i, expected, colors[i])
+				if summary.colors[i] != expected {
+					t.Errorf("Expected (colors[%v] == %v) Got (%v)", i, expected, summary.colors[i])
 				}
 			}
 
 			// verify any remaining slots of results are empty (when there are less than 3 colors in image)
 			if nExpected < 3 {
 				for i := nExpected; i < 3; i += 1 {
-					if colors[i] != PlaceholderColor {
-						t.Errorf("Expected(colors[%v] == placeholder) Got (%v)", i, colors[i])
+					if summary.colors[i] != PlaceholderColor {
+						t.Errorf("Expected(colors[%v] == placeholder) Got (%v)", i, summary.colors[i])
 					}
 				}
 			}
@@ -227,13 +175,13 @@ func TestGetPrevalentColorsManyColors(t *testing.T) {
 }
 
 // prevent compiler from removing result in benchmarks
-var result [3]color.NRGBA
+var result colorSummary
 
 func benchmarkGetPrevalentColors(width, height int, b *testing.B) {
-	var colors [3]color.NRGBA
+	var colors colorSummary
 	colorImg := newColorsImage(width, height, []colorFreq{colorFreq{red, 1}}, false)
 	for n := 0; n < b.N; n++ {
-		colors, _ = getPrevalentColors(colorImg)
+		colors, _ = getPrevalentColors(&colorImg)
 	}
 
 	result = colors
@@ -250,3 +198,22 @@ func BenchmarkGetPrevalentColors100_000px(b *testing.B) {
 func BenchmarkGetPrevalentColors1_000_000px(b *testing.B) {
 	benchmarkGetPrevalentColors(1000, 1000, b)
 }
+
+// const testImagesURL = "localhost:8080/random"
+
+// func benchmarkProcessImages(nImages int, pipelineEntry func(chan RqImage), b *testing.B) {
+// 	imgChn := make(chan RqImage)
+// 	go func() {
+// 		for i := 0; i < nImages; i += 1 {
+// 			imgChn <- RqImage{testImagesURL}
+// 		}
+// 		close(imgChn)
+// 	}()
+// 	for n := 0; n < b.N; n++ {
+// 		pipelineEntry(imgChn)
+// 	}
+// }
+
+// func BenchmarkProcessImagesSync_100(b *testing.B) {
+// 	benchmarkProcessImagesSync(100, ProcessImagesSync, b)
+// }

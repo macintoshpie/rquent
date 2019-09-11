@@ -11,6 +11,36 @@ import (
 	"time"
 )
 
+type RqImage struct {
+	URL      string
+	size     int
+	filePath string
+	summary  colorSummary
+	nFails   int
+}
+
+// most prevalent colors in sorted order (most prevalent first)
+type colorSummary struct {
+	colors []color.NRGBA
+}
+
+func NewRqImage(url string) RqImage {
+	return RqImage{
+		URL:      url,
+		size:     -1,
+		filePath: "",
+		summary:  colorSummary{},
+	}
+}
+
+func (img *RqImage) GetHexSummary() []string {
+	hexes := make([]string, len(img.summary.colors))
+	for i, c := range img.summary.colors {
+		hexes[i] = hexify(c)
+	}
+	return hexes
+}
+
 const defaultTimeout = time.Duration(5 * time.Second)
 
 func newClient(timeout time.Duration) *http.Client {
@@ -50,11 +80,13 @@ func hexify(c color.NRGBA) string {
 var PlaceholderColor = color.NRGBA{}
 
 // Return slice of colors in sorted order of prevalence
-func getPrevalentColors(img image.Image) ([3]color.NRGBA, error) {
-	// NOTE: to generalize to k most prevalent, use a min-heap
+func getPrevalentColors(imgPtr *image.Image) (colorSummary, error) {
+	// TODO: generalize to k most prevalent, use a min-heap
+	img := *imgPtr
+
 	counts := make(map[color.NRGBA]uint64)
 	counts[PlaceholderColor] = 0
-	mostColors := [3]color.NRGBA{PlaceholderColor, PlaceholderColor, PlaceholderColor}
+	mostColors := []color.NRGBA{PlaceholderColor, PlaceholderColor, PlaceholderColor}
 
 	bounds := img.Bounds()
 	for x := bounds.Min.X; x < bounds.Max.X; x++ {
@@ -90,5 +122,5 @@ func getPrevalentColors(img image.Image) ([3]color.NRGBA, error) {
 		}
 	}
 
-	return mostColors, nil
+	return colorSummary{mostColors}, nil
 }
